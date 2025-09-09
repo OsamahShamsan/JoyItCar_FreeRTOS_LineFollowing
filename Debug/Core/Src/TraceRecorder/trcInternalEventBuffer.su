@@ -1,0 +1,7 @@
+../Core/Src/TraceRecorder/trcInternalEventBuffer.c:21:13:xTraceInternalEventBufferInitialize	16	static
+../Core/Src/TraceRecorder/trcInternalEventBuffer.c:43:13:xTraceInternalEventBufferAlloc	16	static
+../Core/Src/TraceRecorder/trcInternalEventBuffer.c:51:13:xTraceInternalEventBufferAllocCommit	24	static
+../Core/Src/TraceRecorder/trcInternalEventBuffer.c:61:13:xTraceInternalEventBufferPush	24	static
+../Core/Src/TraceRecorder/trcInternalEventBuffer.c:69:13:xTraceInternalEventBufferTransferAll	16	static
+../Core/Src/TraceRecorder/trcInternalEventBuffer.c:79:13:xTraceInternalEventBufferTransferChunk	16	static
+../Core/Src/TraceRecorder/trcInternalEventBuffer.c:101:13:xTraceInternalEventBufferClear	8	static

@@ -1,0 +1,5 @@
+../Core/Src/myJoyCar/MotorControl/motor.c:44:6:Motors_Init	16	static
+../Core/Src/myJoyCar/MotorControl/motor.c:55:8:clamp_int	16	static
+../Core/Src/myJoyCar/MotorControl/motor.c:63:6:move_robot	40	static
+../Core/Src/myJoyCar/MotorControl/motor.c:95:6:stop_robot	4	static
+../Core/Src/myJoyCar/MotorControl/motor.c:198:6:servo_set_angle	24	static
