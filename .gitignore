@@ -1,0 +1,16 @@
+# STM32CubeIDE / build artifacts
+Debug/
+Release/
+oldFiles/
+
+# Object and dependency files
+*.o
+*.d
+*.elf
+*.bin
+*.map
+*.su
+
+# Python cache (if using helper scripts)
+*.pyc
+__pycache__/
