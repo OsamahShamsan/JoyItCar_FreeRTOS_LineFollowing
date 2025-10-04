@@ -27,7 +27,7 @@
 // ------------------------------------------------------ Ultrasonic Sensor HC-SR04 --------------------------------------
 // -----------------------------------------------------------------------------------------------------------------------
 
-void USS_Init(TIM_HandleTypeDef *trig_tim, uint32_t trig_channel,
+void USS_init(TIM_HandleTypeDef *trig_tim, uint32_t trig_channel,
               TIM_HandleTypeDef *echo_tim, uint32_t echo_channel)
 {
     HAL_TIM_PWM_Start(trig_tim, trig_channel);
@@ -35,14 +35,8 @@ void USS_Init(TIM_HandleTypeDef *trig_tim, uint32_t trig_channel,
 }
 
 uint32_t USS_get_value(uint32_t pulse_ticks){
-	uint32_t dist = 0;
-
-	if(pulse_ticks >= 38000){
-		dist = 0;
-	} else {
-		dist = (uint32_t)(pulse_ticks) / 580;
-	}
-	return dist;
+	if	(pulse_ticks >= 38000) return NO_OBSTACLE;	// NO_OBSTACLE = 0
+	return (uint32_t)pulse_ticks / 580;
 }
 
 void printDistance(uint32_t dist, uint32_t pulse){
@@ -53,28 +47,59 @@ void printDistance(uint32_t dist, uint32_t pulse){
 	} else {
 		snprintf(msg, sizeof(msg), "dt: %lu ms   | distance %lu cm\r\n", pulse, dist);
 	}
-	HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
+	//HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
 }
 
 // -----------------------------------------------------------------------------------------------------------------------------
 // ------------------------------------------------------ Line Tracker Sensor SEN-KY033LT --------------------------------------
 // -----------------------------------------------------------------------------------------------------------------------------
 
-LTSensor get_LTS_value(const LTS_Config *cfg) {
-    LTSensor val = {
+void LTS_init(TIM_HandleTypeDef *tim, uint32_t channel){
+	HAL_TIM_PWM_Start(tim, channel);
+}
+
+LTSensor get_LTS_value(const LTS_Config *cfg)
+{
+
+	LTSensor val = {
         .leftLine_detected   = HAL_GPIO_ReadPin(cfg->leftPort,   cfg->leftPin)   == GPIO_PIN_SET,
         .middleLine_detected = HAL_GPIO_ReadPin(cfg->middlePort, cfg->middlePin) == GPIO_PIN_SET,
         .rightLine_detected  = HAL_GPIO_ReadPin(cfg->rightPort,  cfg->rightPin)  == GPIO_PIN_SET
     };
-
-    // Build the 3-bit state from the booleans
-    val.current_state =
+     val.current_state =
           (val.leftLine_detected   ? SENSOR_LEFT   : 0)
         | (val.middleLine_detected ? SENSOR_MIDDLE : 0)
         | (val.rightLine_detected  ? SENSOR_RIGHT  : 0);
+     return val;
 
-    return val;
 }
+
+
+static inline uint8_t read_bits(const LTS_Config *cfg)
+{
+    // read each port once (fast, consistent)
+    uint32_t idrL = cfg->leftPort->IDR;
+    uint32_t idrC = cfg->middlePort->IDR;
+    uint32_t idrR = cfg->rightPort->IDR;
+
+    uint8_t bL = (idrL & cfg->leftPin)   ? 1 : 0;
+    uint8_t bC = (idrC & cfg->middlePin) ? 1 : 0;
+    uint8_t bR = (idrR & cfg->rightPin)  ? 1 : 0;
+
+    return (bL<<2) | (bC<<1) | (bR<<0);      // 0..7
+}
+
+/*
+uint8_t bits = read_bits(cfg);
+
+LTSensor val = {
+   .leftLine_detected   = (bits & SENSOR_LEFT)   != 0,
+   .middleLine_detected = (bits & SENSOR_MIDDLE) != 0,
+   .rightLine_detected  = (bits & SENSOR_RIGHT)  != 0,
+   .current_state       = (LineState)bits
+};
+return val;
+*/
 
 /*
 void handleLineAction(LineAction action) {
@@ -117,7 +142,7 @@ void printLinePos(LTSensor current_data){
 	} else {
 		snprintf(msg, sizeof(msg), "Lines position: %u\r\n", lineBits);
 	}
-	HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
+	//HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
 }
 
 // -----------------------------------------------------------------------------------------------------------------------------
@@ -147,7 +172,7 @@ void printObstaclePos(IPSensor current_data) {
     } else {
         snprintf(msg, sizeof(msg), "Obstacles position: %u\r\n", obstacleBits);
     }
-    HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
+    //HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
 }
 
 // -----------------------------------------------------------------------------------------------------------------------------
@@ -289,6 +314,7 @@ Speed_Data Speed_Get(const Speed_Config *cfg)
     return out;
 }
 
+/*
 void printMotorSpeed(const Speed_Config *cfg, UART_HandleTypeDef *huart)
 {
     Speed_Data d = Speed_Get(cfg);
@@ -299,6 +325,6 @@ void printMotorSpeed(const Speed_Config *cfg, UART_HandleTypeDef *huart)
 
     HAL_UART_Transmit(huart, (uint8_t*)buf, (uint16_t)strlen(buf), HAL_MAX_DELAY);
 }
-
+*/
 
 

@@ -31,7 +31,9 @@ extern "C" {
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "FreeRTOS.h"
+#include "task.h"
+#include "semphr.h"
 /* USER CODE END Includes */
 
 /* Exported types ------------------------------------------------------------*/
@@ -41,7 +43,6 @@ extern "C" {
 
 /* Exported constants --------------------------------------------------------*/
 /* USER CODE BEGIN EC */
-
 /* USER CODE END EC */
 
 /* Exported macro ------------------------------------------------------------*/
@@ -61,10 +62,6 @@ void Error_Handler(void);
 /* Private defines -----------------------------------------------------------*/
 #define DCMot_right_ENB_GPO_Pin GPIO_PIN_1
 #define DCMot_right_ENB_GPO_GPIO_Port GPIOC
-#define IPS_right_GPI_Pin GPIO_PIN_2
-#define IPS_right_GPI_GPIO_Port GPIOC
-#define IPS_left_GPI_Pin GPIO_PIN_3
-#define IPS_left_GPI_GPIO_Port GPIOC
 #define DCMotor_right_IN1B_T2C1_PWM_Pin GPIO_PIN_0
 #define DCMotor_right_IN1B_T2C1_PWM_GPIO_Port GPIOA
 #define DCMotor_right_IN2B_T2C2_PWM_Pin GPIO_PIN_1

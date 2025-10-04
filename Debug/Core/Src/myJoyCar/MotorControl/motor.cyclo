@@ -1,5 +1,8 @@
-../Core/Src/myJoyCar/MotorControl/motor.c:44:6:Motors_Init	1
-../Core/Src/myJoyCar/MotorControl/motor.c:55:8:clamp_int	3
-../Core/Src/myJoyCar/MotorControl/motor.c:63:6:move_robot	43
-../Core/Src/myJoyCar/MotorControl/motor.c:95:6:stop_robot	21
-../Core/Src/myJoyCar/MotorControl/motor.c:198:6:servo_set_angle	2
+../Core/Src/myJoyCar/MotorControl/motor.c:26:22:clamp_int	3
+../Core/Src/myJoyCar/MotorControl/motor.c:40:6:motors_init	21
+../Core/Src/myJoyCar/MotorControl/motor.c:58:24:timer_period	1
+../Core/Src/myJoyCar/MotorControl/motor.c:62:24:speed_to_ccr_motor	3
+../Core/Src/myJoyCar/MotorControl/motor.c:71:6:move_robot	43
+../Core/Src/myJoyCar/MotorControl/motor.c:96:6:stop_robot	21
+../Core/Src/myJoyCar/MotorControl/motor.c:439:6:servo_init	1
+../Core/Src/myJoyCar/MotorControl/motor.c:444:6:servo_set_angle	7

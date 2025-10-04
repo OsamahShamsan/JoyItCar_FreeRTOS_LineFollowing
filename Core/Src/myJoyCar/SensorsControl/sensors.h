@@ -26,13 +26,17 @@
 // ------------------------------------------------------ Ultrasonic Sensor HC-SR04 --------------------------------------
 // -----------------------------------------------------------------------------------------------------------------------
 
-void USS_Init(TIM_HandleTypeDef *trig_tim, uint32_t trig_channel, TIM_HandleTypeDef *echo_tim, uint32_t echo_channel);
+#define NO_OBSTACLE 44444
+
+void USS_init(TIM_HandleTypeDef *trig_tim, uint32_t trig_channel, TIM_HandleTypeDef *echo_tim, uint32_t echo_channel);
 uint32_t USS_get_value(uint32_t pulse_ticks);
 void printDistance(uint32_t dist, uint32_t pulse);
 
 // -----------------------------------------------------------------------------------------------------------------------------
 // ------------------------------------------------------ Line Tracker Sensor SEN-KY033LT --------------------------------------
 // -----------------------------------------------------------------------------------------------------------------------------
+
+void LTS_init(TIM_HandleTypeDef *tim, uint32_t channel);
 
 #define SENSOR_LEFT   (1 << 2)
 #define SENSOR_MIDDLE (1 << 1)
@@ -76,7 +80,7 @@ const LineState lineActionLUT[8] = {
 };
 */
 
-extern UART_HandleTypeDef huart3;
+//extern UART_HandleTypeDef huart3;
 
 LTSensor get_LTS_value(const LTS_Config *cfg);
 void printLinePos(LTSensor current_data);
@@ -218,6 +222,7 @@ typedef struct {
    bool leftObstacle_detected;
    bool rightObstacle_detected;
 } IPSensor;
+
 /*
 typedef enum {
 	OBSTACLE_BOTH_SIDES = 0,    // 00
@@ -280,7 +285,7 @@ typedef struct {
 void Speed_Init(const Speed_Config *cfg);
 uint32_t GetTIMClockHz(TIM_HandleTypeDef *htim);
 Speed_Data Speed_Get(const Speed_Config *cfg);
-void printMotorSpeed(const Speed_Config *cfg, UART_HandleTypeDef *huart);
+//void printMotorSpeed(const Speed_Config *cfg, UART_HandleTypeDef *huart);
 
 
 #endif /* SENSORS_H_ */

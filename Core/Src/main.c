@@ -27,7 +27,6 @@
 #include <stdbool.h>
 #include <motor.h>
 #include <sensors.h>
-//#include <inttypes.h>
 #include <stdlib.h>
 
 /* USER CODE END Includes */
@@ -46,24 +45,22 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
+TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim3;
-TIM_HandleTypeDef htim4;
+TIM_HandleTypeDef htim6;
 TIM_HandleTypeDef htim8;
-TIM_HandleTypeDef htim15;
 TIM_HandleTypeDef htim16;
 TIM_HandleTypeDef htim17;
-DMA_HandleTypeDef hdma_tim4_ch4;
 
 UART_HandleTypeDef huart3;
 DMA_HandleTypeDef hdma_usart3_tx;
-DMA_HandleTypeDef hdma_usart3_rx;
 
 /* Definitions for LineFollower_Ta */
 osThreadId_t LineFollower_TaHandle;
 const osThreadAttr_t LineFollower_Ta_attributes = {
   .name = "LineFollower_Ta",
-  .priority = (osPriority_t) osPriorityRealtime,
+  .priority = (osPriority_t) osPriorityRealtime7,
   .stack_size = 128 * 4
 };
 /* Definitions for RGB_Task */
@@ -80,6 +77,11 @@ const osThreadAttr_t StatsPrint_Task_attributes = {
   .priority = (osPriority_t) osPriorityLow,
   .stack_size = 128 * 4
 };
+/* Definitions for gEncMtx */
+osSemaphoreId_t gEncMtxHandle;
+const osSemaphoreAttr_t gEncMtx_attributes = {
+  .name = "gEncMtx"
+};
 /* USER CODE BEGIN PV */
 /* USER CODE END PV */
 
@@ -89,12 +91,12 @@ static void MX_GPIO_Init(void);
 static void MX_DMA_Init(void);
 static void MX_TIM3_Init(void);
 static void MX_TIM8_Init(void);
-static void MX_TIM4_Init(void);
 static void MX_TIM2_Init(void);
-static void MX_TIM16_Init(void);
-static void MX_USART3_UART_Init(void);
 static void MX_TIM17_Init(void);
-static void MX_TIM15_Init(void);
+static void MX_TIM1_Init(void);
+static void MX_TIM6_Init(void);
+static void MX_USART3_UART_Init(void);
+static void MX_TIM16_Init(void);
 void vLineFollowerTask(void *argument);
 void vRGBLightTask(void *argument);
 void vStatusPrintTask(void *argument);
@@ -104,16 +106,30 @@ void vStatusPrintTask(void *argument);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-uint32_t distance_cm = 0;
 volatile uint32_t pulse_ticks = 0;
+const uint8_t min_dist = 5;
+const uint8_t uss_offset = 3;
 
-IPSensor ips  = {0,0};
-LTSensor sensor = {0,0,0,0};
+#define VOLTAGE_LEVEL 95   // 95 = 9.5V, 80 = 8.0V, etc.
 
-extern volatile int datasentflag;
+#if VOLTAGE_LEVEL == 95
+    #define R_PWM        51
+    #define L_PWM        50
+    #define R_PWM_Curve  58
+    #define L_PWM_Curve  57
+#elif VOLTAGE_LEVEL == 80
+    #define R_PWM        61
+    #define L_PWM        60
+    #define R_PWM_Curve  61
+    #define L_PWM_Curve  60
+#endif
 
-volatile uint32_t period_left = 0;
-volatile uint32_t period_right = 0;
+// Now you can declare variables using these constants
+uint16_t R_PWM_Value       = R_PWM;
+uint16_t L_PWM_Value       = L_PWM;
+uint16_t R_PWM_Curve_Value = R_PWM_Curve;
+uint16_t L_PWM_Curve_Value = L_PWM_Curve;
+
 
 MotorHandle Mot_right = {
     .htim = &htim2,
@@ -131,41 +147,8 @@ MotorHandle Mot_left = {
     .ena_pin = DCMot_left_ENA_GPO_Pin           // PA10
 };
 
-const uint8_t ramping_step = 5;
-
-volatile uint8_t angle = 75;
-
-#define PULSES_PER_REV 20
-
-// Shared outputs (read in your task)
-volatile uint32_t period_right_ticks = 0;  // TIM15 ticks between edges (right)
-volatile uint32_t period_left_ticks  = 0;  // TIM15 ticks between edges (left)
-volatile uint32_t last_right_ms = 0;
-volatile uint32_t last_left_ms  = 0;
-
-// Internals for overflow-safe measurement
-volatile uint32_t tim15_overflow_count = 0;
-
-uint32_t rpmR = 0;
-uint32_t rpmL = 0;
-
-uint8_t rxByte;              // one byte received
-char rxLine[16];             // buffer for ASCII number
-uint8_t rxIndex = 0;
 
 
-
-void uart_receive_line(char *buf, uint16_t maxlen) {
-    uint16_t i = 0;
-    uint8_t c;
-    while (i < maxlen - 1) {
-        if (HAL_UART_Receive(&huart3, &c, 1, 5000) == HAL_OK) { // 5s timeout
-            if (c == '\r' || c == '\n') break;
-            buf[i++] = c;
-        }
-    }
-    buf[i] = '\0';
-}
 
 /* USER CODE END 0 */
 
@@ -201,13 +184,14 @@ int main(void)
   MX_DMA_Init();
   MX_TIM3_Init();
   MX_TIM8_Init();
-  MX_TIM4_Init();
   MX_TIM2_Init();
-  MX_TIM16_Init();
-  MX_USART3_UART_Init();
   MX_TIM17_Init();
-  MX_TIM15_Init();
+  MX_TIM1_Init();
+  MX_TIM6_Init();
+  MX_USART3_UART_Init();
+  MX_TIM16_Init();
   /* USER CODE BEGIN 2 */
+
   /*
   char rxbuf[64];
 
@@ -234,8 +218,14 @@ int main(void)
   /* add mutexes, ... */
   /* USER CODE END RTOS_MUTEX */
 
+  /* Create the semaphores(s) */
+  /* creation of gEncMtx */
+  gEncMtxHandle = osSemaphoreNew(1, 1, &gEncMtx_attributes);
+
   /* USER CODE BEGIN RTOS_SEMAPHORES */
   /* add semaphores, ... */
+  //gEncMtx = xSemaphoreCreateMutex();
+  //configASSERT(gEncMtx != NULL);
   /* USER CODE END RTOS_SEMAPHORES */
 
   /* USER CODE BEGIN RTOS_TIMERS */
@@ -262,6 +252,7 @@ int main(void)
 
   /* USER CODE BEGIN RTOS_EVENTS */
   /* add events, ... */
+  /*
   	Set_LED(0, 255, 0, 0);
 	Set_LED(1, 0, 255, 0);
 
@@ -273,6 +264,11 @@ int main(void)
 
 	Set_LED(6, 47, 38, 77);
 	Set_LED(7, 255, 200, 0);
+
+	Set_Brightness(45);
+	//WS2812_Send();
+	*/
+
   /* USER CODE END RTOS_EVENTS */
 
   /* Start scheduler */
@@ -338,6 +334,57 @@ void SystemClock_Config(void)
 }
 
 /**
+  * @brief TIM1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM1_Init(void)
+{
+
+  /* USER CODE BEGIN TIM1_Init 0 */
+
+  /* USER CODE END TIM1_Init 0 */
+
+  TIM_Encoder_InitTypeDef sConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+
+  /* USER CODE BEGIN TIM1_Init 1 */
+
+  /* USER CODE END TIM1_Init 1 */
+  htim1.Instance = TIM1;
+  htim1.Init.Prescaler = 0;
+  htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim1.Init.Period = 65535;
+  htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim1.Init.RepetitionCounter = 0;
+  htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  sConfig.EncoderMode = TIM_ENCODERMODE_TI1;
+  sConfig.IC1Polarity = TIM_ICPOLARITY_RISING;
+  sConfig.IC1Selection = TIM_ICSELECTION_DIRECTTI;
+  sConfig.IC1Prescaler = TIM_ICPSC_DIV1;
+  sConfig.IC1Filter = 6;
+  sConfig.IC2Polarity = TIM_ICPOLARITY_RISING;
+  sConfig.IC2Selection = TIM_ICSELECTION_DIRECTTI;
+  sConfig.IC2Prescaler = TIM_ICPSC_DIV1;
+  sConfig.IC2Filter = 6;
+  if (HAL_TIM_Encoder_Init(&htim1, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterOutputTrigger2 = TIM_TRGO2_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim1, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM1_Init 2 */
+
+  /* USER CODE END TIM1_Init 2 */
+
+}
+
+/**
   * @brief TIM2 Initialization Function
   * @param None
   * @retval None
@@ -357,7 +404,7 @@ static void MX_TIM2_Init(void)
 
   /* USER CODE END TIM2_Init 1 */
   htim2.Instance = TIM2;
-  htim2.Init.Prescaler = 17;
+  htim2.Init.Prescaler = 16;
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
   htim2.Init.Period = 499;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
@@ -464,61 +511,40 @@ static void MX_TIM3_Init(void)
 }
 
 /**
-  * @brief TIM4 Initialization Function
+  * @brief TIM6 Initialization Function
   * @param None
   * @retval None
   */
-static void MX_TIM4_Init(void)
+static void MX_TIM6_Init(void)
 {
 
-  /* USER CODE BEGIN TIM4_Init 0 */
+  /* USER CODE BEGIN TIM6_Init 0 */
 
-  /* USER CODE END TIM4_Init 0 */
+  /* USER CODE END TIM6_Init 0 */
 
-  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
   TIM_MasterConfigTypeDef sMasterConfig = {0};
-  TIM_OC_InitTypeDef sConfigOC = {0};
 
-  /* USER CODE BEGIN TIM4_Init 1 */
+  /* USER CODE BEGIN TIM6_Init 1 */
 
-  /* USER CODE END TIM4_Init 1 */
-  htim4.Instance = TIM4;
-  htim4.Init.Prescaler = 0;
-  htim4.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim4.Init.Period = 211;
-  htim4.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim4.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  if (HAL_TIM_Base_Init(&htim4) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
-  if (HAL_TIM_ConfigClockSource(&htim4, &sClockSourceConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  if (HAL_TIM_PWM_Init(&htim4) != HAL_OK)
+  /* USER CODE END TIM6_Init 1 */
+  htim6.Instance = TIM6;
+  htim6.Init.Prescaler = 42499;
+  htim6.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim6.Init.Period = 3999;
+  htim6.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim6) != HAL_OK)
   {
     Error_Handler();
   }
   sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
   sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-  if (HAL_TIMEx_MasterConfigSynchronization(&htim4, &sMasterConfig) != HAL_OK)
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim6, &sMasterConfig) != HAL_OK)
   {
     Error_Handler();
   }
-  sConfigOC.OCMode = TIM_OCMODE_PWM1;
-  sConfigOC.Pulse = 70;
-  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
-  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
-  if (HAL_TIM_PWM_ConfigChannel(&htim4, &sConfigOC, TIM_CHANNEL_4) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN TIM4_Init 2 */
+  /* USER CODE BEGIN TIM6_Init 2 */
 
-  /* USER CODE END TIM4_Init 2 */
-  HAL_TIM_MspPostInit(&htim4);
+  /* USER CODE END TIM6_Init 2 */
 
 }
 
@@ -583,69 +609,6 @@ static void MX_TIM8_Init(void)
 }
 
 /**
-  * @brief TIM15 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_TIM15_Init(void)
-{
-
-  /* USER CODE BEGIN TIM15_Init 0 */
-
-  /* USER CODE END TIM15_Init 0 */
-
-  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
-  TIM_MasterConfigTypeDef sMasterConfig = {0};
-  TIM_IC_InitTypeDef sConfigIC = {0};
-
-  /* USER CODE BEGIN TIM15_Init 1 */
-
-  /* USER CODE END TIM15_Init 1 */
-  htim15.Instance = TIM15;
-  htim15.Init.Prescaler = 169;
-  htim15.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim15.Init.Period = 65535;
-  htim15.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim15.Init.RepetitionCounter = 0;
-  htim15.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  if (HAL_TIM_Base_Init(&htim15) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
-  if (HAL_TIM_ConfigClockSource(&htim15, &sClockSourceConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  if (HAL_TIM_IC_Init(&htim15) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
-  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-  if (HAL_TIMEx_MasterConfigSynchronization(&htim15, &sMasterConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sConfigIC.ICPolarity = TIM_INPUTCHANNELPOLARITY_RISING;
-  sConfigIC.ICSelection = TIM_ICSELECTION_DIRECTTI;
-  sConfigIC.ICPrescaler = TIM_ICPSC_DIV1;
-  sConfigIC.ICFilter = 8;
-  if (HAL_TIM_IC_ConfigChannel(&htim15, &sConfigIC, TIM_CHANNEL_1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  if (HAL_TIM_IC_ConfigChannel(&htim15, &sConfigIC, TIM_CHANNEL_2) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN TIM15_Init 2 */
-
-  /* USER CODE END TIM15_Init 2 */
-
-}
-
-/**
   * @brief TIM16 Initialization Function
   * @param None
   * @retval None
@@ -679,7 +642,7 @@ static void MX_TIM16_Init(void)
     Error_Handler();
   }
   sConfigOC.OCMode = TIM_OCMODE_PWM1;
-  sConfigOC.Pulse = 150;
+  sConfigOC.Pulse = 0;
   sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
   sConfigOC.OCNPolarity = TIM_OCNPOLARITY_HIGH;
   sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
@@ -833,12 +796,6 @@ static void MX_DMA_Init(void)
   /* DMA1_Channel1_IRQn interrupt configuration */
   HAL_NVIC_SetPriority(DMA1_Channel1_IRQn, 5, 0);
   HAL_NVIC_EnableIRQ(DMA1_Channel1_IRQn);
-  /* DMA1_Channel2_IRQn interrupt configuration */
-  HAL_NVIC_SetPriority(DMA1_Channel2_IRQn, 5, 0);
-  HAL_NVIC_EnableIRQ(DMA1_Channel2_IRQn);
-  /* DMA1_Channel3_IRQn interrupt configuration */
-  HAL_NVIC_SetPriority(DMA1_Channel3_IRQn, 5, 0);
-  HAL_NVIC_EnableIRQ(DMA1_Channel3_IRQn);
 
 }
 
@@ -872,13 +829,13 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(DCMot_right_ENB_GPO_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : IPS_right_GPI_Pin IPS_left_GPI_Pin LTS_left_GPI_Pin LTS_right_GPI_Pin
-                           LTS_middle_GPI_Pin */
-  GPIO_InitStruct.Pin = IPS_right_GPI_Pin|IPS_left_GPI_Pin|LTS_left_GPI_Pin|LTS_right_GPI_Pin
-                          |LTS_middle_GPI_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  /*Configure GPIO pins : SS_right_T15C1_ICDM_Pin SS_left_T15C2_ICDM_Pin */
+  GPIO_InitStruct.Pin = SS_right_T15C1_ICDM_Pin|SS_left_T15C2_ICDM_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  GPIO_InitStruct.Alternate = GPIO_AF9_TIM15;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   /*Configure GPIO pin : DCMot_left_ENA_GPO_Pin */
   GPIO_InitStruct.Pin = DCMot_left_ENA_GPO_Pin;
@@ -887,14 +844,30 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(DCMot_left_ENA_GPO_GPIO_Port, &GPIO_InitStruct);
 
+  /*Configure GPIO pins : LTS_left_GPI_Pin LTS_right_GPI_Pin LTS_middle_GPI_Pin */
+  GPIO_InitStruct.Pin = LTS_left_GPI_Pin|LTS_right_GPI_Pin|LTS_middle_GPI_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : RGB_Lights_T4C4_PWM_Pin */
+  GPIO_InitStruct.Pin = RGB_Lights_T4C4_PWM_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  GPIO_InitStruct.Alternate = GPIO_AF2_TIM4;
+  HAL_GPIO_Init(RGB_Lights_T4C4_PWM_GPIO_Port, &GPIO_InitStruct);
+
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
   /* USER CODE END MX_GPIO_Init_2 */
 }
 
 /* USER CODE BEGIN 4 */
+
 void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
 {
+	/*
 	static uint32_t last_cap_right = 0, last_cap_left = 0;
 	static uint32_t last_ovf_right = 0, last_ovf_left = 0;
 
@@ -925,6 +898,7 @@ void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
 	        }
 	}
 
+*/
 
 	static uint32_t echo_start = 0, echo_end = 0, edge_state = 0;
 
@@ -949,69 +923,9 @@ void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
             }
         }
     }
+
 }
 
-void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim)
-{
-	HAL_TIM_PWM_Stop_DMA(&htim4, TIM_CHANNEL_4);
-	datasentflag=1;
-}
-
-void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart) {
-    if (huart->Instance == USART3) {
-        BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-        vTaskNotifyGiveFromISR(StatsPrint_TaskHandle, &xHigherPriorityTaskWoken);
-        portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
-    }
-}
-
-/*
-// For Bluetooth recieving
-
-void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
-{
-    if (huart->Instance == USART3)
-    {
-        char c = (char)rxByte;
-
-        if (c == '\r') {
-            // ignore CR
-        }
-        else if (c == '\n') {
-            // end of line → convert string to number
-            rxLine[rxIndex] = '\0';
-            int v = atoi(rxLine);
-            if (v < 0) v = 0;
-            if (v > 180) v = 180;
-            angle = (uint8_t)v;
-
-            rxIndex = 0; // reset for next number
-        }
-        else {
-            if (rxIndex < sizeof(rxLine) - 1) {
-                rxLine[rxIndex++] = c;
-            } else {
-                rxIndex = 0; // overflow → reset
-            }
-        }
-
-        HAL_UART_Receive_DMA(&huart3, &rxByte, 1);
-    }
-}
- */
-
-void to_binary(char *dest, uint8_t val, uint8_t bits)
-{
-    for (int i = bits - 1; i >= 0; --i) {
-        *dest++ = (val & (1 << i)) ? '1' : '0';
-    }
-    *dest = '\0';
-}
-
-int8_t ForwardSpeed = 50;
-int8_t ForwardCurveSpeed = 50;
-int8_t stop = 0;
-uint8_t min_dist = 5;
 
 /* USER CODE END 4 */
 
@@ -1025,94 +939,24 @@ uint8_t min_dist = 5;
 void vLineFollowerTask(void *argument)
 {
   /* USER CODE BEGIN 5 */
-	//const TickType_t xPeriod_ramp = pdMS_TO_TICKS(1);
-	const TickType_t xPeriod = pdMS_TO_TICKS(1);
-	TickType_t xLastWakeTime = xTaskGetTickCount();
-
-	Motors_Init(&Mot_right, &Mot_left);
-
-
-	/*
-	HAL_GPIO_WritePin(DCMot_right_ENB_GPO_GPIO_Port, DCMot_right_ENB_GPO_Pin , GPIO_PIN_SET);
-	HAL_GPIO_WritePin(DCMot_left_ENA_GPO_GPIO_Port, DCMot_left_ENA_GPO_Pin, GPIO_PIN_SET);
-	HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
-	HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_2);
-	HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
-	HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2);
-	*/
-
-    USS_Init(&htim17, TIM_CHANNEL_1, &htim8, TIM_CHANNEL_1);
-    LTS_Config cfg = {GPIOC, LTS_left_GPI_Pin, GPIOC, LTS_middle_GPI_Pin, GPIOC, LTS_right_GPI_Pin};
-    IPS_Config ips_cfg = {GPIOC, IPS_left_GPI_Pin,  GPIOC, IPS_right_GPI_Pin};
-
-    TickType_t noLineStartTime = 0;
-    //bool noStartActive = false;
-    bool noLineActive = false;
-
-	vTaskDelayUntil( &xLastWakeTime, pdMS_TO_TICKS(1000));
+	motors_init(&Mot_right, &Mot_left);
+	USS_init(&htim17, TIM_CHANNEL_1, &htim8, TIM_CHANNEL_1);
   /* Infinite loop */
-	for(;;) {
-	  distance_cm = (uint32_t)USS_get_value(pulse_ticks);
-	  sensor = get_LTS_value(&cfg);
-	  ips = get_IPS_value(&ips_cfg);
-
-	  /*
-	  if (distance_cm <= min_dist){
-		  stop_robot();
-		  continue;
-	  }
-	  */
-	  if (sensor.current_state == NO_LINE ) {
-		  if (!noLineActive){
-			  noLineStartTime = xTaskGetTickCount();
-			  noLineActive = true;
-		  } else {
-			  if((xTaskGetTickCount() - noLineStartTime) >= pdMS_TO_TICKS(1000)){
-				  stop_robot();
-				  vTaskDelay(pdMS_TO_TICKS(10));
-				  continue;
-			  }
-		  }
+  for(;;)
+  {
+	  uint32_t uss_d = USS_get_value(pulse_ticks);
+	  if(uss_d > 9){
+		uint8_t state = ((GPIOC->IDR & GPIO_PIN_10) >> 9)| ((GPIOC->IDR & GPIO_PIN_11) >> 11);
+		switch (state) {
+			case 0b11: stop_robot(); 				break; 	// both
+			case 0b10: move_robot(0,R_PWM_Curve); 	break; 	// left
+			case 0b01: move_robot(L_PWM_Curve,0); 	break; 	// right
+			default:   move_robot(L_PWM, R_PWM);  	break;	// none
+		}
 	  } else {
-		  noLineActive = false;
-	  }
-
-	  switch(sensor.current_state){
-	  case NO_LINE: 	move_robot(ForwardSpeed, ForwardSpeed); break;
-	  case MIDDLE:		move_robot(ForwardSpeed, ForwardSpeed); break;
-
-	  case RIGHT:		move_robot(ForwardCurveSpeed,stop); break;
-	  //case RIGHT_CURVE:	move_robot(ForwardSpeed,curveSpeed ); break;
-
-	  case LEFT:		move_robot(stop, ForwardCurveSpeed); break;
-	  //case LEFT_CURVE:	move_robot(curveSpeed,ForwardSpeed); break;
-
-	  case U_TURN:		stop_robot(); 	break;
-	  case JUNCTION:	stop_robot(); 	break;
-	  }
-
-
-	  vTaskDelayUntil(&xLastWakeTime, xPeriod);
-
-
-	  /*
-	  //move_forward
-	  Motor_SetPWM(&Mot_right, MOTOR_DIR_FORWARD, 50.0, ramping_step);
-	  Motor_SetPWM(&Mot_left, MOTOR_DIR_FORWARD, 50.0, ramping_step);
-	  vTaskDelayUntil(&xLastWakeTime, xPeriod);
-	  */
-
-/*
-	  Motor_SetPWM(&Mot_right, MOTOR_DIR_REVERSE, 50.0, ramping_step);
-	  Motor_SetPWM(&Mot_left, MOTOR_DIR_REVERSE, 50.0, ramping_step);
-	  vTaskDelayUntil(&xLastWakeTime, xPeriod);
-
-	  Motor_SetPWM(&Mot_right, MOTOR_DIR_COAST, 0.0, ramping_step);
-	  Motor_SetPWM(&Mot_left, MOTOR_DIR_COAST, 0.0, ramping_step);
-	  vTaskDelayUntil(&xLastWakeTime, xPeriod);
-
-*/	}
-
+			stop_robot();
+		}
+  }
   /* USER CODE END 5 */
 }
 
@@ -1126,11 +970,12 @@ void vLineFollowerTask(void *argument)
 void vRGBLightTask(void *argument)
 {
   /* USER CODE BEGIN vRGBLightTask */
-	const TickType_t xPeriod = pdMS_TO_TICKS(500);
+	//const TickType_t xPeriod = pdMS_TO_TICKS(500);
 	TickType_t xLastWakeTime = xTaskGetTickCount();
   /* Infinite loop */
   for(;;)
   {
+	  /*
 	  for (int i=0; i<46; i++)
 	  {
 		  Set_Brightness(i);
@@ -1144,6 +989,9 @@ void vRGBLightTask(void *argument)
 		  WS2812_Send();
 		  vTaskDelayUntil( &xLastWakeTime, xPeriod);
 	  }
+	  */
+	  vTaskDelayUntil( &xLastWakeTime, pdMS_TO_TICKS(40000));
+
   }
   /* USER CODE END vRGBLightTask */
 }
@@ -1158,33 +1006,144 @@ void vRGBLightTask(void *argument)
 void vStatusPrintTask(void *argument)
 {
   /* USER CODE BEGIN vStatusPrintTask */
-	//static char txBuffer[90];
+	/*
+    //static char txBuffer[128];
 	//static char binObstacles[3 + 1]; // 2 bits + null terminator
 	//static char binLines[4 + 1];     // 3 bits + null terminator
-	const TickType_t xPeriod = pdMS_TO_TICKS(5000);
-	TickType_t xLastWakeTime = xTaskGetTickCount();
+
+   // HAL_TIM_Encoder_Start(&htim1, TIM_CHANNEL_ALL);
+
+
+	EncoderConfig cfg1 = {
+		.htim = &htim1,
+		.inverted = false,
+		.cpr = 3840u,           // counts per revolution
+		.wheel_circum_m = 0.210f // circumference in meters
+	};
+
+	Encoder_Init(&enc1, &cfg1);
+*/
+
+	// Test send over UART
+	const char msg[] = "Encoder test start\r\n";
+	HAL_UART_Transmit(&huart3, (uint8_t*)msg, sizeof(msg)-1, HAL_MAX_DELAY);
+
+	TickType_t xLastWake = xTaskGetTickCount();
+	vTaskDelayUntil(&xLastWake,  pdMS_TO_TICKS(1000));
+
   /* Infinite loop */
   for(;;)
   {
 	  /*
+	  // TEST MESSAGE
+	  // Build the message (could include encoder/sensor values)
+	  int len = snprintf(txBuffer, sizeof(txBuffer), "Hello from FreeRTOS @ %lu ms\r\n",
+						 (unsigned long)xTaskGetTickCount() * portTICK_PERIOD_MS);
+
+	  if (len > 0)
+	  {
+		  // Non-blocking send via DMA
+		  HAL_UART_Transmit_DMA(&huart3, (uint8_t *)txBuffer, len);
+
+		  // Optionally wait until DMA finishes before sending again
+		  // ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(100));
+	  }
+
+
+
+	  //Encoder_Update(&enc1, 0.1f); // dt = 0.1 s
+
+	  //int32_t counts = Encoder_GetCounts(&enc1);
+	  //float rpm = Encoder_GetRPM(&enc1);
+	  //long unsigned int mps = Encoder_GetLinearSpeed(&enc1);
+
+	  //int len = snprintf(txBuffer, sizeof(txBuffer), "C:%ld RPM:%.2f m/s:%lu\r\n",
+		//				 (long)counts, rpm, mps);
+
+	  int len = snprintf(txBuffer, sizeof(txBuffer), "p:%lu m | v:%lu m/s\r\n",
+						 encoder_position, encoder_velocity);
+
+	  if (len > 0 && len < sizeof(txBuffer)) {
+	  	  HAL_UART_Transmit_DMA(&huart3, (uint8_t *)txBuffer, len);
+	  } else {
+
+  		  // snprintf failed (len < 0) or message truncated (len >= sizeof(txBuffer))
+  		  dropCount++;
+
+  		  // Optional: send a fallback warning (short and safe)
+  		  const char warn[] = "TX DROP\r\n";
+  		  HAL_UART_Transmit_DMA(&huart3, (uint8_t *)warn, sizeof(warn) - 1);
+  		  continue;
+  	  }
+
+
+      // ---- Snapshot shared data ----
+	  EncoderData_t s;
+	  s.L_counts = Encoder_GetCounts(&leftEnc);
+	  s.L_rpm    = Encoder_GetRPM(&leftEnc);
+	  s.L_mps    = Encoder_GetLinearSpeed(&leftEnc);
+
+	  //s.R_counts = Encoder_GetCounts(&rightEnc);
+	  //s.R_rpm    = Encoder_GetRPM(&rightEnc);
+	  //s.R_mps    = Encoder_GetLinearSpeed(&rightEnc);
+
+
+
+
+	  if (gEncMtx) {
+		  xSemaphoreTake(gEncMtx, portMAX_DELAY);
+		  s = gEncData;
+		  xSemaphoreGive(gEncMtx);
+	  } else {
+		  s = gEncData;
+	  }
+	  s = gEncData;
+
+
+	  // ---- Format your payload (fit within txBuffer) ----
+	  // Keep it short to avoid heap/stack bloat; floats are OK if task stack is big enough.
+	  int len = snprintf(txBuffer, sizeof(txBuffer),
+						 "L:%ld %.2frpm %.3fm/s \r\n",
+						 (long)s.L_counts, s.L_rpm, s.L_mps);
+
+	  if (len > 0 && len < sizeof(txBuffer)) {
+
+		  // Non-blocking send via DMA
+		  HAL_UART_Transmit_DMA(&huart3, (uint8_t *)txBuffer, len);
+
+	  } else {
+
+		  // snprintf failed (len < 0) or message truncated (len >= sizeof(txBuffer))
+		  dropCount++;
+
+		  // Optional: send a fallback warning (short and safe)
+		  const char warn[] = "TX DROP\r\n";
+		  HAL_UART_Transmit_DMA(&huart3, (uint8_t *)warn, sizeof(warn) - 1);
+		  continue;
+
+	  }
+
+
+
 	  uint8_t obstVal = (ips.leftObstacle_detected << 1) | ips.rightObstacle_detected;
 	  uint8_t linesVal = (sensor.leftLine_detected << 2) | (sensor.middleLine_detected << 1) | sensor.rightLine_detected;
 
-
 	  to_binary(binObstacles,  obstVal,  2);
 	  to_binary(binLines, linesVal, 3);
-		*/
-	  /*
+
 	  int len = snprintf(txBuffer, sizeof(txBuffer),
 		  //"%u    [cm]    \r\n",
 		 "%lu [cm], %s [LR], %s [LMR], %u [deg], %lu [L cm/s], %lu [R cm/s]\r\n",
 		  distance_cm, binObstacles, binLines,  angle, 	  rpmL,   rpmR 		) + 4;
-		*/
-	  //HAL_UART_Transmit_DMA(&huart3, (uint8_t *)txBuffer, len);
 
-	  // Block until DMA finishes
-	  vTaskDelayUntil(&xLastWakeTime, xPeriod);
-	  //ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+	  // else: previous transfer still running → drop this frame (or add a queue)
+	  //ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(5000));
+
+
+	   */
+	  vTaskDelayUntil( &xLastWake, pdMS_TO_TICKS(40000));
+
   }
   /* USER CODE END vStatusPrintTask */
 }
@@ -1200,6 +1159,41 @@ void vStatusPrintTask(void *argument)
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
   /* USER CODE BEGIN Callback 0 */
+	/*
+	timer_counter = __HAL_TIM_GET_COUNTER(&htim1);
+  // measure velocity, position
+  update_encoder(&enc_instance_mot, &htim1);
+  //encoder_position = enc_instance_mot.position;
+  //encoder_velocity = enc_instance_mot.velocity;
+  static char txBuffer[128];
+
+  int len = snprintf(txBuffer, sizeof(txBuffer), "p:%lu m | v:%lu m/s\r\n",
+  						 encoder_position, encoder_velocity);
+
+  	  if (len > 0 && len < sizeof(txBuffer)) {
+  	  	  HAL_UART_Transmit_DMA(&huart3, (uint8_t *)txBuffer, len);
+  	  } else {
+
+	  // snprintf failed (len < 0) or message truncated (len >= sizeof(txBuffer))
+	  dropCount++;
+
+	  // Optional: send a fallback warning (short and safe)
+	  const char warn[] = "TX DROP\r\n";
+	  HAL_UART_Transmit_DMA(&huart3, (uint8_t *)warn, sizeof(warn) - 1);
+  }
+  */
+
+	/*
+	if (htim->Instance == TIM6)
+	  {
+	    HAL_TIM_Base_Stop_IT(htim);
+
+	    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, 0);
+	    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, 0);
+	    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 0);
+	    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, 0);
+	  }
+	  */
 
   /* USER CODE END Callback 0 */
   if (htim->Instance == TIM7)
@@ -1207,10 +1201,24 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
     HAL_IncTick();
   }
   /* USER CODE BEGIN Callback 1 */
+  /*
   if (htim->Instance == TIM15)
   {
 	  tim15_overflow_count++;
   }
+
+  if (htim->Instance == TIM6) {
+
+	  sensor = get_LTS_value(&cfg);
+
+
+	  line_bits = ((GPIOC->IDR & LTS_left_GPI_Pin)   ? 4 : 0) |
+			 	  ((GPIOC->IDR & LTS_middle_GPI_Pin) ? 2 : 0) |
+			 	  ((GPIOC->IDR & LTS_right_GPI_Pin)  ? 1 : 0);
+
+	  g_lts_bits = bits & 0x07;    // publish debounced/raw pattern
+  }
+  */
   /* USER CODE END Callback 1 */
 }
 
